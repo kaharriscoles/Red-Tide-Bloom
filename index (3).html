@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Red Tide - Territorial Bloom</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: #060e17;
+      color: #f5f7fa;
+      font-family: 'Courier New', Courier, monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    #game-container {
+      position: relative;
+      width: 960px;
+      height: 640px;
+      border: 4px solid #162521;
+      border-radius: 8px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.9);
+      overflow: hidden;
+      background: #0f2c3f;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      cursor: crosshair;
+    }
+
+    #hud {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      right: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      pointer-events: none;
+      font-weight: 700;
+      letter-spacing: 1px;
+      z-index: 5;
+    }
+
+    .hud-panel {
+      background: rgba(15, 44, 63, 0.9);
+      border: 1px solid rgba(245, 247, 250, 0.2);
+      padding: 8px 16px;
+      border-radius: 4px;
+      backdrop-filter: blur(4px);
+    }
+
+    .hud-val {
+      font-size: 1.3rem;
+      color: #2bf836;
+      text-shadow: 0 0 10px rgba(43, 248, 54, 0.6);
+    }
+
+    .hud-val.alert {
+      color: #ff2e2e;
+      text-shadow: 0 0 10px rgba(255, 46, 46, 0.9);
+      animation: pulse 0.4s infinite alternate;
+    }
+
+    @keyframes pulse {
+      from { opacity: 0.4; }
+      to { opacity: 1; }
+    }
+
+    #overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(8, 19, 29, 0.94);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+      text-align: center;
+      padding: 30px;
+    }
+
+    #overlay h1 {
+      font-size: 3rem;
+      color: #2bf836;
+      margin-bottom: 12px;
+      letter-spacing: 2px;
+      text-shadow: 0 0 24px rgba(43, 248, 54, 0.6);
+    }
+
+    #overlay p {
+      font-size: 1.05rem;
+      max-width: 580px;
+      line-height: 1.6;
+      color: #f5f7fa;
+      margin-bottom: 24px;
+    }
+
+    #start-btn {
+      padding: 12px 34px;
+      font-size: 1.15rem;
+      font-weight: bold;
+      font-family: inherit;
+      color: #08131d;
+      background: #2bf836;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: transform 0.1s, box-shadow 0.1s;
+    }
+
+    #start-btn:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 24px #2bf836;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="game-container">
+    <div id="hud">
+      <div class="hud-panel">
+        <div>HARBOR COVERAGE:</div>
+        <div id="hud-coverage" class="hud-val">0.0%</div>
+      </div>
+      <div class="hud-panel" style="text-align: center;">
+        <div>YACHT INTAKES CHOKED:</div>
+        <div id="hud-intakes" class="hud-val" style="color: #ffd166;">0 / 4</div>
+      </div>
+      <div class="hud-panel" style="text-align: right;">
+        <div>DISPERSANT IN:</div>
+        <div id="hud-timer" class="hud-val">60.0s</div>
+      </div>
+    </div>
+
+    <canvas id="viewport" width="960" height="640"></canvas>
+
+    <div id="overlay">
+      <h1 id="overlay-title">RED TIDE</h1>
+      <p id="overlay-msg">
+        <strong>You are the bloom, not a creature.</strong><br><br>
+        Drag the growth front to lay a living carpet of toxic algae across Port Olimpic. 
+        Patrolling speedboats will slice channels through your mats with their props, but thick algae slows them into a crawl.<br><br>
+        <strong>Objective:</strong> Reach <strong>50% harbor coverage</strong> AND <strong>choke all 4 cooling intakes</strong> of the SS Solvency before 60 seconds.
+      </p>
+      <button id="start-btn">PROLIFERATE</button>
+    </div>
+  </div>
+
+  <script>
+    /**
+     * RED TIDE - True Territorial Bloom
+     * 
+     * Core Mechanics:
+     * 1. Persistent Territorial Canvas: The player paints a permanent expanding living mat.
+     * 2. Optical Halation & Ink Bleed: Dynamic screen compositing washes green light onto water.
+     * 3. Mechanical Conflict: Boat propellers use 'destination-out' to slice channels through your bloom.
+     * 4. Viscosity Friction: Boats traversing dense bloom suffer 70% speed reduction.
+     * 5. Smothering Win Condition: Envelop the 4 intake zones of the SS Solvency + hit coverage quota.
+     */
+
+    // --- PROCEDURAL WEB AUDIO ENGINE ---
+    class AudioEngine {
+      constructor() { this.ctx = null; }
+      init() {
+        if (!this.ctx) {
+          this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+      }
+      playSpore() {
+        if (!this.ctx) return;
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(160, now);
+        osc.frequency.exponentialRampToValueAtTime(320, now + 0.08);
+        gain.gain.setValueAtTime(0.08, now);
+        gain.gain.linearRampToValueAtTime(0.001, now + 0.08);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.08);
+      }
+      playChop() {
+        if (!this.ctx) return;
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(90, now);
+        osc.frequency.linearRampToValueAtTime(40, now + 0.12);
+        gain.gain.setValueAtTime(0.15, now);
+        gain.gain.linearRampToValueAtTime(0.001, now + 0.12);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.12);
+      }
+      playAlarm() {
+        if (!this.ctx) return;
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(880, now);
+        osc.frequency.setValueAtTime(440, now + 0.08);
+        gain.gain.setValueAtTime(0.06, now);
+        gain.gain.linearRampToValueAtTime(0.001, now + 0.16);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.16);
+      }
+      playVictory() {
+        if (!this.ctx) return;
+        const now = this.ctx.currentTime;
+        [220, 277, 330, 440].forEach((freq, idx) => {
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(freq, now + idx * 0.1);
+          gain.gain.setValueAtTime(0.2, now + idx * 0.1);
+          gain.gain.linearRampToValueAtTime(0.001, now + idx * 0.1 + 0.6);
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(now + idx * 0.1);
+          osc.stop(now + idx * 0.1 + 0.6);
+        });
+      }
+    }
+
+    const sound = new AudioEngine();
+
+    // --- VIEWPORT & PERSISTENT CANVASES ---
+    const canvas = document.getElementById('viewport');
+    const ctx = canvas.getContext('2d');
+    const hudTimer = document.getElementById('hud-timer');
+    const hudCoverage = document.getElementById('hud-coverage');
+    const hudIntakes = document.getElementById('hud-intakes');
+    const overlay = document.getElementById('overlay');
+    const overlayTitle = document.getElementById('overlay-title');
+    const overlayMsg = document.getElementById('overlay-msg');
+    const startBtn = document.getElementById('start-btn');
+
+    // 1. Persistent Living Bloom Canvas (Mask of green territory)
+    const bloomCanvas = document.createElement('canvas');
+    bloomCanvas.width = canvas.width;
+    bloomCanvas.height = canvas.height;
+    const bloomCtx = bloomCanvas.getContext('2d');
+
+    // 2. Low-Resolution Coverage Downsampler (48x32 grid for fast 60fps sampling)
+    const sampleCanvas = document.createElement('canvas');
+    sampleCanvas.width = 48;
+    sampleCanvas.height = 32;
+    const sampleCtx = sampleCanvas.getContext('2d');
+
+    const GAME_DURATION = 60.0;
+    let gameState = {
+      running: false,
+      timeLeft: GAME_DURATION,
+      coveragePct: 0.0,
+      intakesChoked: 0,
+      lastTick: 0,
+      sampleTimer: 0
+    };
+
+    const mouse = { x: 50, y: 50, isDown: true };
+
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      mouse.x = (e.clientX - rect.left) * (canvas.width / rect.width);
+      mouse.y = (e.clientY - rect.top) * (canvas.height / rect.height);
+    });
+
+    // --- GROWTH FRONT (The Tendril Tip Leading the Bloom) ---
+    class BloomFront {
+      constructor() {
+        this.x = 45;
+        this.y = 45;
+        this.vx = 0;
+        this.vy = 0;
+        this.thickness = 28;
+      }
+
+      update(targetX, targetY, dt) {
+        // Fluid spring steering toward cursor
+        const dx = targetX - this.x;
+        const dy = targetY - this.y;
+        this.vx += dx * 0.22;
+        this.vy += dy * 0.22;
+        this.vx *= 0.65;
+        this.vy *= 0.65;
+
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // Keep inside marina basin
+        this.x = Math.max(20, Math.min(canvas.width - 20, this.x));
+        this.y = Math.max(20, Math.min(canvas.height - 20, this.y));
+
+        // EXPAND BLOOM TERRITORY
+        // Permanently paint onto the bloom canvas with organic feathering
+        bloomCtx.save();
+        const rad = this.thickness;
+        const grad = bloomCtx.createRadialGradient(this.x, this.y, 4, this.x, this.y, rad);
+        grad.addColorStop(0, 'rgba(43, 248, 54, 0.95)');
+        grad.addColorStop(0.65, 'rgba(34, 180, 44, 0.7)');
+        grad.addColorStop(1, 'rgba(34, 180, 44, 0)');
+        
+        bloomCtx.fillStyle = grad;
+        bloomCtx.beginPath();
+        bloomCtx.arc(this.x, this.y, rad, 0, Math.PI * 2);
+        bloomCtx.fill();
+        bloomCtx.restore();
+
+        if (Math.random() < 0.25) {
+          sound.playSpore();
+        }
+      }
+
+      renderTip(ctx) {
+        // Blinding bioluminescent growth nucleus
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+        const halo = ctx.createRadialGradient(this.x, this.y, 4, this.x, this.y, 48);
+        halo.addColorStop(0, 'rgba(255, 255, 255, 0.9)');
+        halo.addColorStop(0.3, 'rgba(43, 248, 54, 0.6)');
+        halo.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = halo;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, 48, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    const playerFront = new BloomFront();
+
+    // --- OPPOSITION: PATROLLING SPEEDBOATS (Severing Mechanics) ---
+    class CutterBoat {
+      constructor(x, y, vy, patrolMin, patrolMax) {
+        this.x = x;
+        this.y = y;
+        this.baseVy = vy;
+        this.vy = vy;
+        this.patrolMin = patrolMin;
+        this.patrolMax = patrolMax;
+        this.width = 24;
+        this.height = 54;
+        this.inSludge = false;
+      }
+
+      update(dt) {
+        // 1. SAMPLE VISCOSITY: Is this boat traversing thick algae?
+        // Sample 1 pixel directly under the boat on the bloom canvas
+        const pixel = bloomCtx.getImageData(Math.floor(this.x), Math.floor(this.y), 1, 1).data;
+        this.inSludge = pixel[3] > 60; // Alpha channel > 60 means dense bloom
+
+        // 2. SLUDGE FRICTION: Algae bogs down boat engine by 70%
+        const targetSpeed = this.inSludge ? this.baseVy * 0.32 : this.baseVy;
+        this.vy += (targetSpeed - this.vy) * 0.1;
+
+        this.y += this.vy * dt;
+
+        // Turn around at marina pier borders
+        if (this.y > this.patrolMax) {
+          this.y = this.patrolMax;
+          this.baseVy = -Math.abs(this.baseVy);
+        } else if (this.y < this.patrolMin) {
+          this.y = this.patrolMin;
+          this.baseVy = Math.abs(this.baseVy);
+        }
+
+        // 3. MECHANICAL SEVERING (The Core Counter-Play)
+        // Spinning propellers slice a clean channel through your bloom carpet!
+        bloomCtx.save();
+        bloomCtx.globalCompositeOperation = 'destination-out';
+        bloomCtx.beginPath();
+        const propY = this.vy > 0 ? this.y - 22 : this.y + 22;
+        bloomCtx.arc(this.x, propY, 18, 0, Math.PI * 2);
+        bloomCtx.fill();
+        bloomCtx.restore();
+
+        if (Math.random() < 0.15) {
+          sound.playChop();
+        }
+      }
+
+      render(ctx) {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.vy > 0 ? Math.PI : 0);
+
+        // Stern Propeller Wake / Shredded Foam
+        ctx.fillStyle = this.inSludge ? 'rgba(34, 180, 44, 0.5)' : 'rgba(255, 255, 255, 0.4)';
+        ctx.beginPath();
+        ctx.arc(0, -32, 14, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Hull
+        ctx.fillStyle = '#f5f7fa';
+        ctx.beginPath();
+        ctx.moveTo(0, 30);
+        ctx.lineTo(12, -22);
+        ctx.lineTo(-12, -22);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = '#08131d';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Windshield
+        ctx.fillStyle = '#0f2c3f';
+        ctx.fillRect(-7, -4, 14, 6);
+
+        // Warning Hazard Light
+        ctx.fillStyle = this.inSludge ? '#ff2e2e' : '#ffd166';
+        ctx.beginPath();
+        ctx.arc(0, 8, 3, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+      }
+    }
+
+    // --- ANCHOR ASSET: THE SS SOLVENCY (The Target) ---
+    class SuperYacht {
+      constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        // 4 Critical cooling intake zones that must be choked with algae
+        this.intakes = [
+          { name: 'Bow Port',       rx: -30, ry: -50, choked: false },
+          { name: 'Bow Starboard',  rx: 30,  ry: -50, choked: false },
+          { name: 'Aft Port',       rx: -38, ry: 35,  choked: false },
+          { name: 'Aft Starboard',  rx: 38,  ry: 35,  choked: false }
+        ];
+      }
+
+      update() {
+        let chokedCount = 0;
+        this.intakes.forEach(intake => {
+          const worldX = Math.floor(this.x + intake.rx);
+          const worldY = Math.floor(this.y + intake.ry);
+          const pixel = bloomCtx.getImageData(worldX, worldY, 1, 1).data;
+          // When bloom alpha over the intake exceeds threshold, it chokes!
+          if (pixel[3] > 180) {
+            intake.choked = true;
+          }
+          if (intake.choked) chokedCount++;
+        });
+        gameState.intakesChoked = chokedCount;
+      }
+
+      render(ctx) {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+
+        // Drop shadow into water
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+        ctx.shadowBlur = 18;
+
+        // Luxury Fiberglass Hull
+        ctx.fillStyle = '#f5f7fa';
+        ctx.beginPath();
+        ctx.moveTo(0, -90);
+        ctx.lineTo(44, 52);
+        ctx.lineTo(-44, 52);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = '#162521';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Teak Sun Deck
+        ctx.fillStyle = '#6e4f3a';
+        ctx.fillRect(-28, -20, 56, 58);
+
+        // Cyan Plunge Pool
+        ctx.fillStyle = '#00e5ff';
+        ctx.fillRect(-14, 12, 28, 20);
+
+        // Helipad
+        ctx.strokeStyle = '#ffd166';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(0, -42, 14, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // RENDER COOLING INTAKES
+        this.intakes.forEach(i => {
+          ctx.beginPath();
+          ctx.arc(i.rx, i.ry, 9, 0, Math.PI * 2);
+          ctx.fillStyle = i.choked ? '#2bf836' : '#ff2e2e';
+          ctx.fill();
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        });
+
+        ctx.restore();
+      }
+    }
+
+    let boats = [];
+    let yacht = null;
+
+    function initMarina() {
+      // 1. Reset Bloom Mask
+      bloomCtx.clearRect(0, 0, bloomCanvas.width, bloomCanvas.height);
+
+      // Seed the initial agricultural bloom root at the Storm Drain
+      bloomCtx.save();
+      const initialRoot = bloomCtx.createRadialGradient(30, 30, 5, 30, 30, 95);
+      initialRoot.addColorStop(0, 'rgba(43, 248, 54, 0.95)');
+      initialRoot.addColorStop(1, 'rgba(34, 180, 44, 0)');
+      bloomCtx.fillStyle = initialRoot;
+      bloomCtx.beginPath();
+      bloomCtx.arc(30, 30, 95, 0, Math.PI * 2);
+      bloomCtx.fill();
+      bloomCtx.restore();
+
+      // 2. Spawn Yacht & Cutters
+      yacht = new SuperYacht(760, 300);
+      boats = [
+        new CutterBoat(460, 180, 140, 110, 530),
+        new CutterBoat(580, 440, -160, 110, 530)
+      ];
+
+      playerFront.x = 60;
+      playerFront.y = 60;
+      playerFront.vx = 0;
+      playerFront.vy = 0;
+    }
+
+    function calculateCoverage() {
+      // Downsample the bloom mask to 48x32 to count choked pixels without dropping frames
+      sampleCtx.clearRect(0, 0, 48, 32);
+      sampleCtx.drawImage(bloomCanvas, 0, 0, 48, 32);
+      const imgData = sampleCtx.getImageData(0, 0, 48, 32).data;
+      
+      let greenPixels = 0;
+      const totalPixels = 48 * 32;
+      for (let i = 3; i < imgData.length; i += 4) {
+        if (imgData[i] > 90) greenPixels++;
+      }
+      return (greenPixels / totalPixels) * 100;
+    }
+
+    function resetGame() {
+      gameState.running = true;
+      gameState.timeLeft = GAME_DURATION;
+      gameState.coveragePct = 0;
+      gameState.intakesChoked = 0;
+      gameState.lastTick = performance.now();
+      gameState.sampleTimer = 0;
+
+      initMarina();
+      overlay.style.display = 'none';
+      hudTimer.classList.remove('alert');
+      sound.init();
+    }
+
+    function endGame(victory) {
+      gameState.running = false;
+      overlay.style.display = 'flex';
+      if (victory) {
+        sound.playVictory();
+        overlayTitle.innerText = "BLOOM COMPLETE";
+        overlayTitle.style.color = "#2bf836";
+        overlayMsg.innerText = `You suffocated Port Olimpic at ${Math.round(GAME_DURATION - gameState.timeLeft)}s! The SS Solvency's engines choked on thick cyanobacteria, and the harbor is an irreversible dead zone.`;
+        startBtn.innerText = "PROLIFERATE AGAIN";
+      } else {
+        overlayTitle.innerText = "BLOOM HALTED";
+        overlayTitle.style.color = "#ff2e2e";
+        overlayMsg.innerText = gameState.coveragePct < 50
+          ? `Dispersant rings suppressed your spread. You only reached ${gameState.coveragePct.toFixed(1)}% coverage (50% needed).`
+          : `You covered the harbor, but failed to choke all 4 cooling intakes of the SS Solvency (${gameState.intakesChoked}/4).`;
+        startBtn.innerText = "RETRY 60s RUN";
+      }
+    }
+
+    // --- MAIN TICK ---
+    function update(dt) {
+      gameState.timeLeft -= dt;
+      if (gameState.timeLeft <= 0) {
+        gameState.timeLeft = 0;
+        endGame(false);
+        return;
+      }
+
+      if (gameState.timeLeft <= 10) {
+        hudTimer.classList.add('alert');
+        if (Math.floor(gameState.timeLeft * 2) % 2 === 0) {
+          sound.playAlarm();
+        }
+      }
+
+      // Update Player Expansion Front
+      playerFront.update(mouse.x, mouse.y, dt);
+
+      // Update Boat Patrols & Propeller Severing
+      boats.forEach(b => b.update(dt));
+
+      // Update Superyacht Intakes
+      yacht.update();
+
+      // Periodic Coverage Calculation (Sample every 0.3s)
+      gameState.sampleTimer += dt;
+      if (gameState.sampleTimer > 0.3) {
+        gameState.sampleTimer = 0;
+        gameState.coveragePct = calculateCoverage();
+
+        // WIN CONDITION: >= 50% Coverage AND all 4 yacht intakes smothered
+        if (gameState.coveragePct >= 50.0 && gameState.intakesChoked === 4) {
+          endGame(true);
+          return;
+        }
+      }
+
+      // Update HUD
+      hudTimer.innerText = gameState.timeLeft.toFixed(1) + 's';
+      hudCoverage.innerText = gameState.coveragePct.toFixed(1) + '%';
+      hudIntakes.innerText = `${gameState.intakesChoked} / 4`;
+      if (gameState.intakesChoked === 4) {
+        hudIntakes.style.color = "#2bf836";
+      } else {
+        hudIntakes.style.color = "#ffd166";
+      }
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // LAYER 1: Deep Mediterranean Sea Water
+      ctx.fillStyle = '#0f2c3f';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // LAYER 2: Architectural Piers & Storm Drain Outfall
+      ctx.fillStyle = '#6e4f3a';
+      ctx.fillRect(0, 70, 440, 16);
+      ctx.fillRect(0, 550, 440, 16);
+
+      // Concrete Outfall Lip
+      ctx.fillStyle = '#484b50';
+      ctx.beginPath();
+      ctx.arc(0, 0, 70, 0, Math.PI / 2);
+      ctx.fill();
+      ctx.strokeStyle = '#2bf836';
+      ctx.lineWidth = 4;
+      ctx.stroke();
+
+      // LAYER 3: PERSISTENT LIVING BLOOM TERRITORY (Physical Slime Layer)
+      ctx.drawImage(bloomCanvas, 0, 0);
+
+      // LAYER 4: OPTICAL HALATION BLOOM (Screen Bleed Wash)
+      // Uses 'screen' composite mode to wash vibrant green light across the water
+      ctx.save();
+      ctx.globalCompositeOperation = 'screen';
+      ctx.globalAlpha = 0.35;
+      ctx.drawImage(bloomCanvas, 0, 0);
+      ctx.restore();
+
+      // LAYER 5: Vessels (Cutters & SuperYacht)
+      boats.forEach(b => b.render(ctx));
+      yacht.render(ctx);
+
+      // LAYER 6: Growth Nucleus Front
+      playerFront.renderTip(ctx);
+
+      // LAYER 7: Dispersant Warning Ring (0:50 - 0:60)
+      if (gameState.timeLeft <= 10) {
+        const ringProgress = (10 - gameState.timeLeft) / 10;
+        const ringRadius = (canvas.width / 1.1) * (1 - ringProgress * 0.45);
+        ctx.save();
+        ctx.strokeStyle = '#ff2e2e';
+        ctx.lineWidth = 6;
+        ctx.setLineDash([16, 12]);
+        ctx.beginPath();
+        ctx.arc(canvas.width / 2, canvas.height / 2, Math.max(ringRadius, 40), 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    function tick(time) {
+      if (!gameState.running) return;
+      const dt = Math.min((time - gameState.lastTick) / 1000, 0.1);
+      gameState.lastTick = time;
+
+      update(dt);
+      draw();
+
+      requestAnimationFrame(tick);
+    }
+
+    startBtn.addEventListener('click', () => {
+      resetGame();
+      requestAnimationFrame(tick);
+    });
+
+    initMarina();
+    draw();
+  </script>
+</body>
+</html>
