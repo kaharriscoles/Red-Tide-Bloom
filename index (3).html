@@ -622,7 +622,7 @@
 
       // Periodic Coverage Calculation (Sample every 0.3s)
       gameState.sampleTimer += dt;
-      if (gameState.sampleTimer > 0.3) {
+      if (gameState.sampleTimer > 0.2) {
         gameState.sampleTimer = 0;
         gameState.coveragePct = calculateCoverage();
 
