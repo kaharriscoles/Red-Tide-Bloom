@@ -187,8 +187,8 @@
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
         osc.type = 'sine';
-        osc.frequency.setValueAtTime(160, now);
-        osc.frequency.exponentialRampToValueAtTime(320, now + 0.08);
+        osc.frequency.setValueAtTime(140, now);
+        osc.frequency.exponentialRampToValueAtTime(280, now + 0.08);
         gain.gain.setValueAtTime(0.08, now);
         gain.gain.linearRampToValueAtTime(0.001, now + 0.08);
         osc.connect(gain);
