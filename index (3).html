@@ -372,7 +372,7 @@
         this.inSludge = pixel[3] > 60; // Alpha channel > 60 means dense bloom
 
         // 2. SLUDGE FRICTION: Algae bogs down boat engine by 70%
-        const targetSpeed = this.inSludge ? this.baseVy * 0.32 : this.baseVy;
+        const targetSpeed = this.inSludge ? this.baseVy * 0.25 : this.baseVy;
         this.vy += (targetSpeed - this.vy) * 0.1;
 
         this.y += this.vy * dt;
