@@ -104,7 +104,7 @@
 
     #overlay p {
       font-size: 1.05rem;
-      max-width: 600px;
+      max-width: 620px;
       line-height: 1.6;
       color: #f5f7fa;
       margin-bottom: 24px;
@@ -157,9 +157,9 @@
       <h1 id="overlay-title">RED TIDE</h1>
       <p id="overlay-msg">
         <strong>You are the bloom. Proliferate and ignite.</strong><br><br>
-        Drag the growth front from the storm drain across Port Olimpic. 
+        <strong>HOLD LEFT-CLICK</strong> to lead the growth front from the storm drain across Port Olimpic. Release to plan your trajectory.<br>
         Connect your bloom to the <strong>3 orange fertilizer valves</strong> to trigger <strong>Super-Bloom Shockwaves</strong> that blast open territory and disable cutter boat engines.<br><br>
-        <strong>Objective:</strong> Reach <strong>50% coverage</strong> AND <strong>choke all 4 cooling intakes</strong> of the SS Solvency before 60 seconds.
+        <strong>Objective:</strong> Reach <strong>50% coverage</strong> AND <strong>choke all 4 yacht cooling intakes</strong> before 60 seconds.
       </p>
       <button id="start-btn">IGNITE BLOOM</button>
     </div>
@@ -218,6 +218,21 @@
         sweepGain.connect(this.ctx.destination);
         sweep.start(now);
         sweep.stop(now + 0.4);
+      }
+      playIntakeChoke() {
+        if (!this.ctx) return;
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(320, now);
+        osc.frequency.linearRampToValueAtTime(110, now + 0.22);
+        gain.gain.setValueAtTime(0.24, now);
+        gain.gain.linearRampToValueAtTime(0.001, now + 0.22);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.22);
       }
       playChop() {
         if (!this.ctx) return;
@@ -305,12 +320,25 @@
       screenFlash: 0
     };
 
-    const mouse = { x: 50, y: 50 };
+    // --- INPUT CONTROLLER (Mouse Hold + Tracking) ---
+    const mouse = { x: 50, y: 50, isDown: false };
 
     canvas.addEventListener('mousemove', (e) => {
       const rect = canvas.getBoundingClientRect();
       mouse.x = (e.clientX - rect.left) * (canvas.width / rect.width);
       mouse.y = (e.clientY - rect.top) * (canvas.height / rect.height);
+    });
+
+    canvas.addEventListener('mousedown', (e) => {
+      if (e.button === 0) mouse.isDown = true;
+    });
+
+    window.addEventListener('mouseup', () => {
+      mouse.isDown = false;
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      mouse.isDown = false;
     });
 
     // --- SHOCKWAVE VISUAL FX ---
@@ -342,59 +370,82 @@
 
     let shockwaves = [];
 
-    // --- GROWTH FRONT (Leading Tip) ---
+    // --- VELOCITY-CLAMPED GROWTH FRONT ---
     class BloomFront {
       constructor() {
         this.x = 45;
         this.y = 45;
-        this.vx = 0;
-        this.vy = 0;
         this.thickness = 30;
+        this.maxSpeed = 260; // Max advance rate in pixels/second (eliminates wiper exploit)
       }
 
-      update(targetX, targetY) {
+      update(targetX, targetY, isDown, dt) {
+        // Only proliferate when the mouse is actively held
+        if (!isDown) return;
+
         const dx = targetX - this.x;
         const dy = targetY - this.y;
-        this.vx += dx * 0.22;
-        this.vy += dy * 0.22;
-        this.vx *= 0.65;
-        this.vy *= 0.65;
+        const dist = Math.hypot(dx, dy);
 
-        this.x += this.vx;
-        this.y += this.vy;
+        if (dist > 3) {
+          const travel = Math.min(dist, this.maxSpeed * dt);
+          this.x += (dx / dist) * travel;
+          this.y += (dy / dist) * travel;
 
-        this.x = Math.max(20, Math.min(canvas.width - 20, this.x));
-        this.y = Math.max(20, Math.min(canvas.height - 20, this.y));
+          this.x = Math.max(20, Math.min(canvas.width - 20, this.x));
+          this.y = Math.max(20, Math.min(canvas.height - 20, this.y));
 
-        // Paint living green bloom
-        bloomCtx.save();
-        const rad = this.thickness;
-        const grad = bloomCtx.createRadialGradient(this.x, this.y, 4, this.x, this.y, rad);
-        grad.addColorStop(0, 'rgba(43, 248, 54, 0.95)');
-        grad.addColorStop(0.65, 'rgba(34, 180, 44, 0.7)');
-        grad.addColorStop(1, 'rgba(34, 180, 44, 0)');
-        
-        bloomCtx.fillStyle = grad;
-        bloomCtx.beginPath();
-        bloomCtx.arc(this.x, this.y, rad, 0, Math.PI * 2);
-        bloomCtx.fill();
-        bloomCtx.restore();
+          // Paint living green bloom
+          bloomCtx.save();
+          const rad = this.thickness;
+          const grad = bloomCtx.createRadialGradient(this.x, this.y, 4, this.x, this.y, rad);
+          grad.addColorStop(0, 'rgba(43, 248, 54, 0.95)');
+          grad.addColorStop(0.65, 'rgba(34, 180, 44, 0.7)');
+          grad.addColorStop(1, 'rgba(34, 180, 44, 0)');
+          
+          bloomCtx.fillStyle = grad;
+          bloomCtx.beginPath();
+          bloomCtx.arc(this.x, this.y, rad, 0, Math.PI * 2);
+          bloomCtx.fill();
+          bloomCtx.restore();
 
-        if (Math.random() < 0.22) {
-          sound.playSpore();
+          if (Math.random() < 0.22) {
+            sound.playSpore();
+          }
         }
       }
 
-      renderTip(ctx) {
+      renderTip(ctx, targetX, targetY, isDown) {
         ctx.save();
+
+        // 1. DORMANT STATE: Dashed trajectory reticle
+        if (!isDown) {
+          ctx.strokeStyle = 'rgba(43, 248, 54, 0.4)';
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([4, 4]);
+          ctx.beginPath();
+          ctx.moveTo(this.x, this.y);
+          ctx.lineTo(targetX, targetY);
+          ctx.stroke();
+
+          // Small tip locator
+          ctx.fillStyle = '#2bf836';
+          ctx.beginPath();
+          ctx.arc(this.x, this.y, 5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+          return;
+        }
+
+        // 2. ACTIVE PROLIFERATION: Optical halo nucleus
         ctx.globalCompositeOperation = 'screen';
-        const halo = ctx.createRadialGradient(this.x, this.y, 4, this.x, this.y, 48);
-        halo.addColorStop(0, 'rgba(255, 255, 255, 0.9)');
-        halo.addColorStop(0.35, 'rgba(43, 248, 54, 0.6)');
+        const halo = ctx.createRadialGradient(this.x, this.y, 4, this.x, this.y, 52);
+        halo.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
+        halo.addColorStop(0.35, 'rgba(43, 248, 54, 0.7)');
         halo.addColorStop(1, 'rgba(0, 0, 0, 0)');
         ctx.fillStyle = halo;
         ctx.beginPath();
-        ctx.arc(this.x, this.y, 48, 0, Math.PI * 2);
+        ctx.arc(this.x, this.y, 52, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
       }
@@ -402,14 +453,14 @@
 
     const playerFront = new BloomFront();
 
-    // --- NEW: FERTILIZER VALVE CIRCUIT MECHANIC ---
+    // --- FERTILIZER VALVE CIRCUIT MECHANIC ---
     class FertilizerValve {
       constructor(x, y, name) {
         this.x = x;
         this.y = y;
         this.name = name;
         this.radius = 24;
-        this.charge = 0;          // 0 to 1.0 (fills as bloom bridges it)
+        this.charge = 0;
         this.detonated = false;
         this.pulse = 0;
       }
@@ -427,7 +478,7 @@
         const nearHead = distToHead < 50;
 
         if (hasBloom || nearHead) {
-          this.charge += dt * 1.6; // ~0.65 seconds of connection to detonate
+          this.charge += dt * 1.6;
           if (this.charge >= 1.0) {
             this.detonate(boats);
           }
@@ -440,13 +491,13 @@
         this.detonated = true;
         this.charge = 1.0;
         gameState.valvesDetonated++;
-        gameState.screenFlash = 0.55; // Screen-wide optical bloom flash
+        gameState.screenFlash = 0.55;
         sound.playDetonation();
 
         // 1. Trigger shockwave
         shockwaves.push(new Shockwave(this.x, this.y));
 
-        // 2. Blast massive living bloom territory into the mask (Radius 150px)
+        // 2. Blast massive living bloom territory (Radius 150px)
         bloomCtx.save();
         const blastGrad = bloomCtx.createRadialGradient(this.x, this.y, 10, this.x, this.y, 150);
         blastGrad.addColorStop(0, 'rgba(43, 248, 54, 1.0)');
@@ -459,7 +510,7 @@
         bloomCtx.fill();
         bloomCtx.restore();
 
-        // 3. Stun/Clog any cutter boats within blast range for 5.5 seconds!
+        // 3. Stun/Clog any cutter boats within blast range for 5.5 seconds
         boats.forEach(b => {
           const d = Math.hypot(b.x - this.x, b.y - this.y);
           if (d < 190) {
@@ -473,7 +524,6 @@
         ctx.translate(this.x, this.y);
 
         if (this.detonated) {
-          // Choked/Exhausted Valve (Bioluminescent green)
           ctx.fillStyle = '#2bf836';
           ctx.beginPath();
           ctx.arc(0, 0, 16, 0, Math.PI * 2);
@@ -485,10 +535,7 @@
           return;
         }
 
-        // Active Priming Valve
         const glow = Math.sin(this.pulse) * 4;
-        
-        // Industrial Housing
         ctx.fillStyle = '#484b50';
         ctx.beginPath();
         ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
@@ -497,14 +544,12 @@
         ctx.lineWidth = 2;
         ctx.stroke();
 
-        // Warning Ring
         ctx.strokeStyle = '#ff9f1c';
         ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.arc(0, 0, this.radius + 2 + glow, 0, Math.PI * 2);
         ctx.stroke();
 
-        // Charge Progress Ring
         if (this.charge > 0) {
           ctx.strokeStyle = '#2bf836';
           ctx.lineWidth = 5;
@@ -513,7 +558,6 @@
           ctx.stroke();
         }
 
-        // Core Valve Icon
         ctx.fillStyle = this.charge > 0 ? '#2bf836' : '#ff9f1c';
         ctx.fillRect(-6, -6, 12, 12);
 
@@ -531,14 +575,13 @@
         this.patrolMin = patrolMin;
         this.patrolMax = patrolMax;
         this.inSludge = false;
-        this.stunTimer = 0; // Triggered by Super-Bloom detonations
+        this.stunTimer = 0;
       }
 
       update(dt) {
-        // Stunned State: Engine clogged by algae blast
         if (this.stunTimer > 0) {
           this.stunTimer -= dt;
-          return; // No movement, no propeller slicing
+          return;
         }
 
         const pixel = bloomCtx.getImageData(Math.floor(this.x), Math.floor(this.y), 1, 1).data;
@@ -575,7 +618,6 @@
         ctx.translate(this.x, this.y);
         ctx.rotate(this.vy > 0 ? Math.PI : 0);
 
-        // Stern Propeller Wake
         if (this.stunTimer <= 0) {
           ctx.fillStyle = this.inSludge ? 'rgba(34, 180, 44, 0.5)' : 'rgba(255, 255, 255, 0.4)';
           ctx.beginPath();
@@ -583,7 +625,6 @@
           ctx.fill();
         }
 
-        // Hull
         ctx.fillStyle = this.stunTimer > 0 ? '#8f8567' : '#f5f7fa';
         ctx.beginPath();
         ctx.moveTo(0, 30);
@@ -595,11 +636,9 @@
         ctx.lineWidth = 2;
         ctx.stroke();
 
-        // Windshield
         ctx.fillStyle = '#0f2c3f';
         ctx.fillRect(-7, -4, 14, 6);
 
-        // Warning light (flashes red when disabled)
         ctx.fillStyle = this.stunTimer > 0 
           ? (Math.floor(performance.now() * 0.01) % 2 === 0 ? '#ff2e2e' : '#ffd166')
           : (this.inSludge ? '#ff2e2e' : '#ffd166');
@@ -622,16 +661,21 @@
           { rx: -38, ry: 35,  choked: false },
           { rx: 38,  ry: 35,  choked: false }
         ];
+        this.pingPulse = 0;
       }
 
-      update() {
+      update(dt) {
+        this.pingPulse += dt * 3;
         let chokedCount = 0;
         this.intakes.forEach(intake => {
-          const worldX = Math.floor(this.x + intake.rx);
-          const worldY = Math.floor(this.y + intake.ry);
-          const pixel = bloomCtx.getImageData(worldX, worldY, 1, 1).data;
-          if (pixel[3] > 180) {
-            intake.choked = true;
+          if (!intake.choked) {
+            const worldX = Math.floor(this.x + intake.rx);
+            const worldY = Math.floor(this.y + intake.ry);
+            const pixel = bloomCtx.getImageData(worldX, worldY, 1, 1).data;
+            if (pixel[3] > 180) {
+              intake.choked = true;
+              sound.playIntakeChoke();
+            }
           }
           if (intake.choked) chokedCount++;
         });
@@ -672,8 +716,17 @@
         ctx.arc(0, -42, 14, 0, Math.PI * 2);
         ctx.stroke();
 
-        // 4 Intakes
+        // 4 Intakes with Radiating Sonar Pings
         this.intakes.forEach(i => {
+          if (!i.choked) {
+            const ringR = 10 + (Math.sin(this.pingPulse) * 0.5 + 0.5) * 8;
+            ctx.strokeStyle = 'rgba(255, 46, 46, 0.7)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(i.rx, i.ry, ringR, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+
           ctx.beginPath();
           ctx.arc(i.rx, i.ry, 9, 0, Math.PI * 2);
           ctx.fillStyle = i.choked ? '#2bf836' : '#ff2e2e';
@@ -695,7 +748,7 @@
       bloomCtx.clearRect(0, 0, bloomCanvas.width, bloomCanvas.height);
       shockwaves = [];
 
-      // Initial Storm Drain Bloom Root
+      // Initial Storm Drain Root
       bloomCtx.save();
       const initialRoot = bloomCtx.createRadialGradient(30, 30, 5, 30, 30, 95);
       initialRoot.addColorStop(0, 'rgba(43, 248, 54, 0.95)');
@@ -706,14 +759,12 @@
       bloomCtx.fill();
       bloomCtx.restore();
 
-      // Strategic Fertilizer Valves (Circuit Detonation Nodes)
       valves = [
         new FertilizerValve(450, 78, "North Outfall"),
         new FertilizerValve(360, 545, "South Runoff"),
         new FertilizerValve(650, 480, "Deep Intake")
       ];
 
-      // Vessels
       yacht = new SuperYacht(770, 300);
       boats = [
         new CutterBoat(480, 180, 140, 110, 530),
@@ -722,8 +773,6 @@
 
       playerFront.x = 60;
       playerFront.y = 60;
-      playerFront.vx = 0;
-      playerFront.vy = 0;
     }
 
     function calculateCoverage() {
@@ -794,23 +843,18 @@
         }
       }
 
-      // Update Player Growth Front
-      playerFront.update(mouse.x, mouse.y);
+      // Proliferate only while dragging with capped velocity
+      playerFront.update(mouse.x, mouse.y, mouse.isDown, dt);
 
-      // Update Valves
       valves.forEach(v => v.update(dt, playerFront.x, playerFront.y, boats));
 
-      // Update Shockwaves
       for (let i = shockwaves.length - 1; i >= 0; i--) {
         shockwaves[i].update(dt);
         if (shockwaves[i].alpha <= 0) shockwaves.splice(i, 1);
       }
 
-      // Update Boat Patrols
       boats.forEach(b => b.update(dt));
-
-      // Update Superyacht
-      yacht.update();
+      yacht.update(dt);
 
       // Coverage Sampling (5Hz)
       gameState.sampleTimer += dt;
@@ -818,7 +862,6 @@
         gameState.sampleTimer = 0;
         gameState.coveragePct = calculateCoverage();
 
-        // WIN CONDITION: 50% Coverage AND all 4 yacht intakes smothered
         if (gameState.coveragePct >= 50.0 && gameState.intakesChoked === 4) {
           endGame(true);
           return;
@@ -838,7 +881,7 @@
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // LAYER 1: Deep Mediterranean Harbor Water
+      // LAYER 1: Deep Mediterranean Sea Water
       ctx.fillStyle = '#0f2c3f';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -866,7 +909,7 @@
       ctx.drawImage(bloomCanvas, 0, 0);
       ctx.restore();
 
-      // LAYER 5: Fertilizer Circuit Valves & Shockwaves
+      // LAYER 5: Valves & Shockwaves
       valves.forEach(v => v.render(ctx));
       shockwaves.forEach(sw => sw.render(ctx));
 
@@ -874,8 +917,8 @@
       boats.forEach(b => b.render(ctx));
       yacht.render(ctx);
 
-      // LAYER 7: Growth Nucleus Front
-      playerFront.renderTip(ctx);
+      // LAYER 7: Growth Front Tip & Aiming Reticle
+      playerFront.renderTip(ctx, mouse.x, mouse.y, mouse.isDown);
 
       // LAYER 8: Super-Bloom Optical Whiteout Flash
       if (gameState.screenFlash > 0) {
