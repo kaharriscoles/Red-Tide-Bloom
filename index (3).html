@@ -427,7 +427,7 @@
         const nearHead = distToHead < 50;
 
         if (hasBloom || nearHead) {
-          this.charge += dt * 1.0; // ~0.65 seconds of connection to detonate
+          this.charge += dt * 1.6; // ~0.65 seconds of connection to detonate
           if (this.charge >= 1.0) {
             this.detonate(boats);
           }
@@ -544,7 +544,7 @@
         const pixel = bloomCtx.getImageData(Math.floor(this.x), Math.floor(this.y), 1, 1).data;
         this.inSludge = pixel[3] > 60;
 
-        const targetSpeed = this.inSludge ? this.baseVy * 0.28 : this.baseVy;
+        const targetSpeed = this.inSludge ? this.baseVy * 0.35 : this.baseVy;
         this.vy += (targetSpeed - this.vy) * 0.1;
         this.y += this.vy * dt;
 
